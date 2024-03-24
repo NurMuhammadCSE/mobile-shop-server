@@ -4,6 +4,13 @@ const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+// const formData = require('form-data');
+// const Mailgun = require('mailgun.js');
+// const mailgun = new Mailgun(formData);
+// const mg = mailgun.client({
+//   username: 'api',
+//   key: process.env.MAIL_GUN_API_KEY,
+// });
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -70,6 +77,28 @@ async function run() {
       res.send({ token });
     });
 
+    // users related api
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.get("/users/admin/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      let admin = false;
+      if (user) {
+        admin = user?.role === "admin";
+      }
+      res.send({ admin });
+    });
+
     app.post("/users", async (req, res) => {
       const user = req.body;
       // insert email if user doesn't exists:
@@ -83,8 +112,66 @@ async function run() {
       res.send(result);
     });
 
+    app.patch(
+      "/users/admin/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+          $set: {
+            role: "admin",
+          },
+        };
+        const result = await userCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+      }
+    );
+
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await userCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    // Phone Collection
     app.get("/phone", async (erq, res) => {
       const result = await phoneCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.get("/phone/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await phoneCollection.findOne(query);
+      res.send(result);
+    });
+
+    app.patch("/phone/:id", async (req, res) => {
+      const item = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          phone_name: item.phone_name,
+          brand: item.brand,
+          price: item.price,
+          description: item.description,
+          rating: item.rating,
+          image: item.image,
+        },
+      };
+
+      const result = await phoneCollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+    app.delete("/phone/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await phoneCollection.deleteOne(query);
       res.send(result);
     });
 
@@ -148,24 +235,6 @@ async function run() {
       };
 
       const deleteResult = await cartCollection.deleteMany(query);
-
-      // send user email about payment confirmation
-      mg.messages
-        .create(process.env.MAIL_SENDING_DOMAIN, {
-          from: "Mailgun Sandbox <postmaster@sandboxbdfffae822db40f6b0ccc96ae1cb28f3.mailgun.org>",
-          to: ["jhankarmahbub7@gmail.com"],
-          subject: "Bistro Boss Order Confirmation",
-          text: "Testing some Mailgun awesomness!",
-          html: `
-            <div>
-              <h2>Thank you for your order</h2>
-              <h4>Your Transaction Id: <strong>${payment.transactionId}</strong></h4>
-              <p>We would like to get your feedback about the food</p>
-            </div>
-          `,
-        })
-        .then((msg) => console.log(msg)) // logs response data
-        .catch((err) => console.log(err)); // logs any error`;
 
       res.send({ paymentResult, deleteResult });
     });
