@@ -4,20 +4,19 @@ const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-// const formData = require('form-data');
-// const Mailgun = require('mailgun.js');
-// const mailgun = new Mailgun(formData);
-// const mg = mailgun.client({
-//   username: 'api',
-//   key: process.env.MAIL_GUN_API_KEY,
-// });
 
 const app = express();
 const port = process.env.PORT || 5000;
 
 // Middlewares
-app.use(cors());
+const corsOptions = {
+  origin: ["https://mobile-shop-fdd56.web.app"],
+  credentials: true,
+  optionSuccessStatus: 200,
+};
+app.use(cors(corsOptions));
 app.use(express.json());
+app.use(cors());
 
 const uri = process.env.URI;
 
@@ -39,6 +38,7 @@ async function run() {
     const userCollection = client.db("mobileShop").collection("user");
     const cartCollection = client.db("mobileShop").collection("cart");
     const paymentCollection = client.db("mobileShop").collection("payment");
+    const reviewCollection = client.db("mobileShop").collection("review");
 
     // middlewares
     const verifyToken = (req, res, next) => {
@@ -149,6 +149,12 @@ async function run() {
       res.send(result);
     });
 
+    app.post("/phone", verifyToken, verifyAdmin, async (req, res) => {
+      const phoneData = req.body;
+      const result = await phoneCollection.insertOne(phoneData);
+      res.send(result);
+    });
+
     app.patch("/phone/:id", async (req, res) => {
       const item = req.body;
       const id = req.params.id;
@@ -239,11 +245,127 @@ async function run() {
       res.send({ paymentResult, deleteResult });
     });
 
+    // stats or analytics
+    app.get("/admin-stats", async (req, res) => {
+      const users = await userCollection.estimatedDocumentCount();
+      const phoneItems = await phoneCollection.estimatedDocumentCount();
+      const orders = await paymentCollection.estimatedDocumentCount();
+
+      // this is not the best way
+      // const payments = await paymentCollection.find().toArray();
+      // const revenue = payments.reduce((total, payment) => total + payment.price, 0);
+
+      const result = await paymentCollection
+        .aggregate([
+          {
+            $group: {
+              _id: null,
+              totalRevenue: {
+                $sum: "$price",
+              },
+            },
+          },
+        ])
+        .toArray();
+
+      const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+      res.send({
+        users,
+        phoneItems,
+        orders,
+        revenue,
+      });
+    });
+
+    // order status
+    /**
+     * ----------------------------
+     *    NON-Efficient Way
+     * ------------------------------
+     * 1. load all the payments
+     * 2. for every phoneItemIds (which is an array), go find the item from menu collection
+     * 3. for every item in the menu collection that you found from a payment entry (document)
+     */
+
+    // using aggregate pipeline
+    // app.get("/order-stats", async (req, res) => {
+    //   const result = await paymentCollection
+    //     .aggregate([
+    //       {
+    //         $unwind: "$phoneItemIds",
+    //       },
+    //       {
+    //         $lookup: {
+    //           from: "phone",
+    //           localField: "phoneItemIds",
+    //           foreignField: "_id",
+    //           as: "phoneItems",
+    //         },
+    //       },
+    //       {
+    //         $unwind: "$phoneItems",
+    //       },
+    //       {
+    //         $group: {
+    //           _id: "$phoneItems.brand",
+    //           quantity: { $sum: 1 },
+    //           revenue: { $sum: "$phoneItems.price" },
+    //         },
+    //       },
+    //       {
+    //         $project: {
+    //           _id: 0,
+    //           brand: "$_id",
+    //           quantity: "$quantity",
+    //           revenue: "$revenue",
+    //         },
+    //       },
+    //     ])
+    //     .toArray();
+
+    //   res.send(result);
+    // });
+
+    app.get("/order-stats", async (req, res) => {
+      const result = await paymentCollection
+        .aggregate([
+          {
+            $unwind: "$phoneItemIds",
+          },
+          {
+            $lookup: {
+              from: "phone",
+              localField: "phoneItemIds",
+              foreignField: "_id",
+              as: "phoneItemIds",
+            },
+          },
+          // {
+          //   $unwind: "$phoneItems",
+          // },
+        ])
+        .toArray();
+      res.send(result);
+    });
+
+    // Review API
+    app.get("/review", async (req, res) => {
+      const result = await reviewCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.post("/review", async (req, res) => {
+      const review = req.body;
+      const result = await reviewCollection.insertOne(review);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
